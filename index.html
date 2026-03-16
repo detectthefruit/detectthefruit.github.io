@@ -2,6 +2,7 @@
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
 <style>
   body {
     margin: 0;
@@ -31,33 +32,21 @@
     font-weight: 700;
   }
 
-  #listenBtn {
-    margin-top: 30px;
-    padding: 20px 40px;
-    font-size: 24px;
-    border: none;
-    border-radius: 50px;
-    background: #4CAF50;
-    color: white;
-    font-weight: 700;
-    width: 80vw;
-    max-width: 350px;
-    cursor: pointer;
-    transition: 0.2s;
+  .listening-indicator {
+    margin-top: 20px;
+    font-size: 18px;
+    opacity: 0.7;
   }
 
-  #listenBtn:active {
-    transform: scale(0.96);
-  }
-
-  .listening {
+  .pulse {
     animation: pulse 1s infinite;
-    background: #ff4444 !important;
+    color: #ff4444;
   }
 
   @keyframes pulse {
-    0% { box-shadow: 0 0 0px 0px rgba(255,0,0,0.6); }
-    100% { box-shadow: 0 0 25px 10px rgba(255,0,0,0); }
+    0% { opacity: 0.4; }
+    50% { opacity: 1; }
+    100% { opacity: 0.4; }
   }
 </style>
 </head>
@@ -69,7 +58,7 @@
 <video id="cam" autoplay playsinline></video>
 <div id="label">Loading...</div>
 
-<button id="listenBtn">Tap to Ask</button>
+<div id="listenStatus" class="listening-indicator">Listening…</div>
 
 <audio id="ding" src="ding.mp3" preload="auto"></audio>
 
@@ -78,7 +67,20 @@
 let model;
 let currentPrediction = "Unknown";
 
-// -------------------- MODEL + CAMERA --------------------
+// -------------------- CROP LIKE TEACHABLE MACHINE --------------------
+function cropToSquare(video) {
+  const size = Math.min(video.videoWidth, video.videoHeight);
+  const startX = (video.videoWidth - size) / 2;
+  const startY = (video.videoHeight - size) / 2;
+
+  return tf.browser.fromPixels(video)
+    .slice([startY, startX, 0], [size, size, 3])
+    .resizeNearestNeighbor([224, 224])
+    .toFloat()
+    .expandDims(0);
+}
+
+// -------------------- LOAD MODEL + CAMERA --------------------
 async function start() {
   model = await tf.loadLayersModel("model/model.json");
 
@@ -86,18 +88,18 @@ async function start() {
   const stream = await navigator.mediaDevices.getUserMedia({ video: true });
   video.srcObject = stream;
 
+  // Prediction loop
   setInterval(async () => {
-    const img = tf.browser.fromPixels(video)
-      .resizeNearestNeighbor([224,224])
-      .toFloat()
-      .expandDims(0);
+    if (!video.videoWidth) return;
 
+    const img = cropToSquare(video);
     const prediction = model.predict(img);
     const index = prediction.argMax(-1).dataSync()[0];
 
-    if (index === 0) currentPrediction = "Apple";
-    else if (index === 1) currentPrediction = "Orange";
-    else currentPrediction = "Neither";
+    // Adjust based on your metadata.json order
+    if (index === 0) currentPrediction = "an apple";
+    else if (index === 1) currentPrediction = "an orange";
+    else currentPrediction = "something I don't recognize";
 
     document.getElementById("label").innerText = currentPrediction;
 
@@ -108,66 +110,67 @@ async function start() {
 
 start();
 
-// -------------------- SPEECH RECOGNITION --------------------
-const listenBtn = document.getElementById("listenBtn");
-const ding = document.getElementById("ding");
-
+// -------------------- ALWAYS-LISTENING SPEECH RECOGNITION --------------------
 let recognition;
+const ding = document.getElementById("ding");
+const listenStatus = document.getElementById("listenStatus");
+
 const wakePhrases = [
   "what is this",
   "what am i looking at",
   "identify this",
   "what do you see",
-  "tell me what this is",
-  "what fruit is this"
+  "tell me what this is"
 ];
 
-if ("webkitSpeechRecognition" in window) {
+function startRecognition() {
+  if (!("webkitSpeechRecognition" in window)) return;
+
   recognition = new webkitSpeechRecognition();
-  recognition.continuous = false;
+  recognition.continuous = true;
   recognition.lang = "en-US";
   recognition.interimResults = false;
 
   recognition.onstart = () => {
-    listenBtn.classList.add("listening");
     ding.play();
+    listenStatus.classList.add("pulse");
   };
 
   recognition.onend = () => {
-    listenBtn.classList.remove("listening");
+    listenStatus.classList.remove("pulse");
+    setTimeout(startRecognition, 300); // restart automatically
   };
 
-  recognition.onresult = function(event) {
-    const transcript = event.results[0][0].transcript.toLowerCase();
+  recognition.onresult = (event) => {
+    const transcript = event.results[event.results.length - 1][0].transcript.toLowerCase();
 
     for (let phrase of wakePhrases) {
       if (transcript.includes(phrase)) {
-        speak(currentPrediction);
+        speak("This is " + currentPrediction);
         break;
       }
     }
   };
+
+  recognition.start();
 }
 
-listenBtn.onclick = () => {
-  if (recognition) recognition.start();
-};
+startRecognition();
 
 // -------------------- SPEECH SYNTHESIS --------------------
 function speak(text) {
   const msg = new SpeechSynthesisUtterance(text);
 
-  // Try to pick a natural-sounding voice
+  // Try to pick a natural voice
   const voices = speechSynthesis.getVoices();
   const preferred = voices.find(v =>
-    v.name.toLowerCase().includes("female") ||
-    v.name.toLowerCase().includes("samantha") ||
     v.name.toLowerCase().includes("google")
   );
   if (preferred) msg.voice = preferred;
 
   msg.rate = 1;
   msg.pitch = 1;
+
   window.speechSynthesis.speak(msg);
 }
 </script>
